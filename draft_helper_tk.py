@@ -3,22 +3,32 @@ import csv
 import re
 from collections import OrderedDict
 import sys
+import Tkinter as tk
+import ttk
+import tkMessageBox
+from easygui import *
+from os import remove
 
+
+try:
+    remove('ranks.db')
+except OSError:
+    pass
 conn = sql.connect('ranks.db')
 c = conn.cursor()
 
 player_table_columns = OrderedDict(
         [
-        ('name', 'text collate nocase'),
-        ('position', 'text'),
-        ('rank diff', 'int'),
-        ('espn_rank', 'int'),
-        ('bye', 'real'),
-        ('rw_rank', 'int'),
-        ('team', 'text'),
-        ('rw_posrank', 'int'),
-        ('rw_tier', 'text'),
-        ('drafted', 'int')
+            ('name', 'text collate nocase'),
+            ('position', 'text'),
+            ('rank diff', 'int'),
+            ('espn_rank', 'int'),
+            ('bye', 'real'),
+            ('rw_rank', 'int'),
+            ('team', 'text'),
+            ('rw_posrank', 'int'),
+            ('rw_tier', 'text'),
+            ('drafted', 'int')
         ])
 
 position_list = ['QB', 'RB', 'WR', 'TE']
@@ -30,13 +40,17 @@ col_list.extend(player_table_columns.keys())
 col_list.append('id')
 player_cols_to_print = ['name', 'team', 'rw_rank', 'rw_tier', 'diff']
 
+
 def create_player_table(cursor):
-    s = "CREATE TABLE if not exists players (%s id INTEGER PRIMARY KEY not null)" % ''.join(map(lambda item: '%s %s ,' % (item[0],item[1]), player_table_columns.items()))
+    s = "CREATE TABLE if not exists players (%s id INTEGER PRIMARY KEY not null)"\
+        % ''.join(map(lambda item: '%s %s ,' % (item[0], item[1]), player_table_columns.items()))
     print s
     cursor.execute(s)
 
+
 def get_datatype_by_colname(colname):
     return player_table_columns[colname]
+
 
 def load_data(connection, cursor):
     cursor.execute("drop table if exists players")
@@ -46,7 +60,7 @@ def load_data(connection, cursor):
         r = csv.reader(infile)
         headers = ['name', 'position', 'team', 'bye']
         for i in xrange(2):
-            headers.extend(['site%d'%i, 'rank%d'%i, 'value%d'%i])
+            headers.extend(['site%d' % i, 'rank%d' % i, 'posrank%s' % i, "tier%s" % i])
         next(r)
         for row in r:
             name = row[0]
@@ -57,33 +71,40 @@ def load_data(connection, cursor):
             except ValueError:
                 bye = 'NULL'
             # site0 = row[4]
-            espn_rank = int(row[5])
-            # espn value = row[6]
-            # site1 = row[7]
             try:
-                rotoworld_rank = int(row[8])
+                espn_rank = int(row[5])
+            except ValueError:
+                espn_rank = "NULL"
+            # espn_posrank = row[6]
+            # espn tier N/A row[7]
+            # site1 = row[8]
+            try:
+                rotoworld_rank = int(row[9])
             except ValueError:
                 rotoworld_rank = 'NULL'
-            rotoworld_tier = row[9]
             rotoworld_posrank = row[10]
+            rotoworld_tier = row[11]
+
             to_remove = r"%sT?" % position.lower()
-            #try:
-            #    rotoworld_tier = int(re.sub(to_remove, '', rotoworld_tier))
-            #except ValueError:
-            #    rotoworld_tier = 'NULL'
             try:
                 rotoworld_posrank = int(re.sub(to_remove, '', rotoworld_posrank))
             except ValueError:
                 rotoworld_posrank = 'NULL'
-            # rotoworld value = row[11]
-            diff = int(row[12])
-            if diff == 1000:
-                diff = 'NULL'
+
+            if rotoworld_rank != 'NULL' and espn_rank != 'NULL':
+                diff = rotoworld_rank - espn_rank
+            elif espn_rank != 'NULL':
+                diff = -1 * espn_rank
+            elif rotoworld_rank != "NULL":
+                diff = rotoworld_rank
+            else:
+                diff = "NULL"
             s = "INSERT INTO players VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             t = (name, position, diff, espn_rank, bye, rotoworld_rank, team, rotoworld_posrank, rotoworld_tier, 0, None)
             print t
             cursor.execute(s, t)
             connection.commit()
+
 
 def get_drafted_subquery(drafted, has_previous_clauses):
     if has_previous_clauses:
@@ -92,6 +113,7 @@ def get_drafted_subquery(drafted, has_previous_clauses):
         s = ""
     s += " drafted = %d" % int(drafted)
     return s
+
 
 def assemble_select_query(query_args, drafted=False, orderby=None):
     q = "select * from players where "
@@ -111,12 +133,15 @@ def assemble_select_query(query_args, drafted=False, orderby=None):
     print q
     return q
 
+
 def get_players(cursor, query_args, drafted=False, orderby=None):
     cursor.execute(assemble_select_query(query_args, drafted=drafted, orderby=orderby))
     return cursor.fetchall()
 
+
 def get_players_by_position(cursor, position, drafted=False, orderby=None):
-    return get_players(cursor, {"position":position}, drafted=drafted, orderby=orderby)
+    return get_players(cursor, {"position": position}, drafted=drafted, orderby=orderby)
+
 
 def set_draft_status(connection, cursor, player_id, drafted):
     s = "update players set drafted = %s where id = %s" % (drafted, player_id)
@@ -124,12 +149,15 @@ def set_draft_status(connection, cursor, player_id, drafted):
     cursor.execute("update players set drafted = ? where id = ?", (drafted, player_id))
     connection.commit()
 
+
 def set_drafted(connection, cursor, player_id):
     set_draft_status(connection, cursor, player_id, True)
     get_number_players_drafted(cursor)
 
+
 def set_undrafted(connection, cursor, player_id):
     set_draft_status(connection, cursor, player_id, False)
+
 
 def get_color_from_tier(position, rotoworld_tier):
     to_remove = r"%sT?" % position.lower()
@@ -138,8 +166,9 @@ def get_color_from_tier(position, rotoworld_tier):
         i = tier_num % len(colors)
         return colors[i]
     except ValueError:
-        rotoworld_tier = 'NULL'
+        # rotoworld_tier = 'NULL'
         return "white"
+
 
 def get_number_players_drafted(cursor):
     # count number drafted players
@@ -155,45 +184,54 @@ def get_number_players_drafted(cursor):
 load_data(conn, c)
 
 
-
-
 #############################################################
 #             UI
 #############################################################
 
 
-
-import Tkinter as tk
-import ttk
-import tkMessageBox
-
 # get text input
 def get_text_input(msg):
-    return enterbox(msg,"Enter text")
+    return enterbox(msg, "Enter text")
+
+
 # text box mark as drafted
 def get_text_mark_drafted():
     return get_text_input("Mark who as drafted?")
+
+
 # text box mark as undrafted
 def get_text_mark_undrafted():
     return get_text_input("Mark who as undrafted?")
+
 next_choices = ["Mark Drafted", "Mark UN-drafted"]
+
+
 def get_marking_choice():
     c = choicebox("What next?", 'What next?', next_choices)
     if "UN-" in c:
         return get_text_mark_undrafted(), False
     else:
         return get_text_mark_drafted(), True
+
+
 # box pops up list of possible matches by name, choose one to mark as drafted / undrafted
 def get_user_choice(choices_list):
     return choicebox("Multiple matches. Choose one:", "choose one", choices_list)
+
+
 # get id from choice
 def get_id_from_player_data(player_data):
     return get_data_from_player_row(player_data, 'id')
+
+
 def get_data_from_player_row(player_row, col_name):
     return player_row[col_list.index(col_name)]
+
+
 # confirm yes no
 def confirm(action_msg):
     return ccbox("About to %s. Confirm?" % action_msg, 'Confirm')
+
 
 def print_table(table):
     col_width = [max(len(x) for x in col) for col in zip(*table)]
@@ -206,12 +244,14 @@ def print_table(table):
             print 'wahoo found ' + line[0]
             f += " | " + "{0:{1}}".format(line[0], col_width)
             s += " | " + "{0:{1}}".format(line[1], col_width)
+    # return s
     return f + "\n" + s
-    #return s
+
 
 def to_player_str(player_row):
     table = zip(col_list, map(str, player_row))
     return print_table(table)
+
 
 def get_top_by_position(position, num=20):
     l = get_players_by_position(c, position, orderby='rw_posrank')
@@ -220,15 +260,18 @@ def get_top_by_position(position, num=20):
     else:
         return l
 
+
 def display_positional_data():
     for pos in position_list:
         msgbox('\n'.join(map(to_player_str, get_top_by_position(pos))), "Top available players at %s:" % pos)
+
 
 def display_top_data(num=10):
     l = get_players(c, {}, orderby='rw_rank')
     if num < len(l):
         l = l[0:num]
     msgbox('\n'.join(map(to_player_str, l)), "Top available players:")
+
 
 def augment_values_pick_diff(player_data, col_list, num_players_drafted=None, cursor=None):
     # augmented_cols, augmented_vals = augment_values_pick_diff(p)
@@ -238,11 +281,15 @@ def augment_values_pick_diff(player_data, col_list, num_players_drafted=None, cu
     pl_data_list = None
     if player_data:
         espn_rank = get_data_from_player_row(player_data, 'espn_rank')
-        espn_pick_diff = num_players_drafted - espn_rank
-        pl_data_list = list(player_data) #  ensure list
+        if str(espn_rank) == 'NULL':
+            espn_pick_diff = 'NULL'
+        else:
+            espn_pick_diff = num_players_drafted - espn_rank
+        pl_data_list = list(player_data)  # ensure list
         i = pl_data_list.index(espn_rank)
         pl_data_list.insert(i, espn_pick_diff)
     return pl_col_list, pl_data_list
+
 
 def get_augmented_col_list(col_list, cursor=None):
     c, _ = augment_values_pick_diff([], col_list, cursor=None)
@@ -258,6 +305,7 @@ def get_augmented_col_list(col_list, cursor=None):
 # draft or undraft, modifying list
 # repopulate lists
 # quit button
+
 
 class BaseDialog(tk.Toplevel):
     def __init__(self, parent, title = None, list_things=None):
@@ -298,28 +346,32 @@ class BaseDialog(tk.Toplevel):
         self.bind("<Escape>", self.cancel)
         self.bind("<Double-Button-1>", self.ok)
         box.pack()
-    #
+
     # standard button semantics
     def ok(self, event=None):
         if not self.validate():
-            self.initial_focus.focus_set() # put focus back
+            self.initial_focus.focus_set()  # put focus back
             return
         self.withdraw()
         self.update_idletasks()
         self.apply()
         self.cancel()
+
     def cancel(self, event=None):
         # put focus back to the parent window
         self.parent.focus_set()
         self.destroy()
-    #
+
     # command hooks
     def validate(self):
-        return 1 # override
+        return 1  # override
+
     def apply(self):
-        pass # override
+        pass  # override
+
     def populate(self, list_things=None):
         pass
+
 
 class ListDialog(BaseDialog):
     def body(self, master):
@@ -328,17 +380,20 @@ class ListDialog(BaseDialog):
         self.l1.pack()
         self.l1.grid(row=0, column=1)
         self.l1.bind("<Double-Button-1>", self.ok)
-        return self.l1 # initial focus
+        return self.l1  # initial focus
+
     def apply(self):
         items = map(int, self.l1.curselection())
         try:
             self.result = items[0]
         except IndexError:
             pass
+
     def populate(self, list_things=None):
         if list_things is not None:
             for thing in list_things:
                 self.l1.insert(tk.END, thing)
+
 
 class Drafter(ttk.Frame):
     def __init__(self, parent):
@@ -361,7 +416,7 @@ class Drafter(ttk.Frame):
         self.initUI()
 
     def onFrameConfigure(self, event):
-        '''Reset the scroll region to encompass the inner frame'''
+        """Reset the scroll region to encompass the inner frame"""
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def set_name_entry_text(self, text):
@@ -376,9 +431,11 @@ class Drafter(ttk.Frame):
         self.name_var = tk.StringVar()
         self.name_entry = tk.Entry(self.canvas, text="Enter player whose draft status to edit", textvar=self.name_var)
         self.name_entry.grid()
-        self.draft_button = ttk.Button(self.canvas, text="Mark Drafted", command=lambda: self.player_mark_logic(self.name_entry.get(), True))
+        self.draft_button = ttk.Button(self.canvas, text="Mark Drafted",
+                                       command=lambda: self.player_mark_logic(self.name_entry.get(), True))
         self.draft_button.grid()
-        self.undraft_button = ttk.Button(self.canvas, text="Mark Undrafted", command=lambda: self.player_mark_logic(self.name_entry.get(), False))
+        self.undraft_button = ttk.Button(self.canvas, text="Mark Undrafted",
+                                         command=lambda: self.player_mark_logic(self.name_entry.get(), False))
         self.undraft_button.grid()
         # quit
         quit_button = ttk.Button(self.canvas, text="quit", command=self.quit)
@@ -395,9 +452,11 @@ class Drafter(ttk.Frame):
         self.top_wrs_pane = ttk.Treeview(self.frame, columns=augmented_col_list, selectmode="browse")
         self.top_wrs_pane.grid()
         self.top_tes_pane = ttk.Treeview(self.frame, columns=augmented_col_list, selectmode="browse")
-        #self.top_tes_pane.tag_bind("<<TreeviewSelect>>", callback=lambda: self.set_name_entry_text(self.top_tes_pane.selection()))
+        # self.top_tes_pane.tag_bind("<<TreeviewSelect>>",
+        #                            callback=lambda: self.set_name_entry_text(self.top_tes_pane.selection()))
         self.top_tes_pane.grid()
         self.populate_data_panes()
+
     def populate_data_panes(self):
         self.all_players_pane.delete(*self.all_players_pane.get_children())
         self.top_qbs_pane.delete(*self.top_qbs_pane.get_children())
@@ -411,32 +470,47 @@ class Drafter(ttk.Frame):
                 break
             t = get_data_from_player_row(p, 'rw_tier')
             pos = get_data_from_player_row(p, 'position')
-            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list, num_players_drafted=num_players_drafted, cursor=c)
-            self.all_players_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals), tags=(get_color_from_tier(pos, t)))
+            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list,
+                                                                      num_players_drafted=num_players_drafted,
+                                                                      cursor=c)
+            self.all_players_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals),
+                                         tags=(get_color_from_tier(pos, t)))
         top_qbs = get_top_by_position('QB')
         for p in top_qbs:
             t = get_data_from_player_row(p, 'rw_tier')
             pos = get_data_from_player_row(p, 'position')
-            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list, num_players_drafted=num_players_drafted, cursor=c)
-            self.top_qbs_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals), tags=(get_color_from_tier(pos, t)))
+            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list,
+                                                                      num_players_drafted=num_players_drafted,
+                                                                      cursor=c)
+            self.top_qbs_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals),
+                                     tags=(get_color_from_tier(pos, t)))
         top_rbs = get_top_by_position('RB')
         for p in top_rbs:
             t = get_data_from_player_row(p, 'rw_tier')
             pos = get_data_from_player_row(p, 'position')
-            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list, num_players_drafted=num_players_drafted, cursor=c)
-            self.top_rbs_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals), tags=(get_color_from_tier(pos, t)))
+            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list,
+                                                                      num_players_drafted=num_players_drafted,
+                                                                      cursor=c)
+            self.top_rbs_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals),
+                                     tags=(get_color_from_tier(pos, t)))
         top_wrs = get_top_by_position('WR')
         for p in top_wrs:
             t = get_data_from_player_row(p, 'rw_tier')
             pos = get_data_from_player_row(p, 'position')
-            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list, num_players_drafted=num_players_drafted, cursor=c)
-            self.top_wrs_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals), tags=(get_color_from_tier(pos, t)))
+            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list,
+                                                                      num_players_drafted=num_players_drafted,
+                                                                      cursor=c)
+            self.top_wrs_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals),
+                                     tags=(get_color_from_tier(pos, t)))
         top_tes = get_top_by_position('TE')
         for p in top_tes:
             t = get_data_from_player_row(p, 'rw_tier')
             pos = get_data_from_player_row(p, 'position')
-            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list, num_players_drafted=num_players_drafted, cursor=c)
-            self.top_tes_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals), tags=(get_color_from_tier(pos, t)))
+            augmented_cols, augmented_vals = augment_values_pick_diff(p, col_list,
+                                                                      num_players_drafted=num_players_drafted,
+                                                                      cursor=c)
+            self.top_tes_pane.insert("", tk.END, values=zip(augmented_cols, augmented_vals),
+                                     tags=(get_color_from_tier(pos, t)))
         trees = [self.all_players_pane, self.top_qbs_pane, self.top_rbs_pane, self.top_wrs_pane, self.top_tes_pane]
         for t in trees:
             for color in colors:
@@ -446,11 +520,11 @@ class Drafter(ttk.Frame):
         if not player_name:
             return
         print "player:%s to set drafted? %s" % (player_name, to_set_drafted)
-        possible_players = get_players(c, {"name":player_name}, drafted=(not to_set_drafted), orderby='name')
-        print "possible matches:",possible_players
+        possible_players = get_players(c, {"name": player_name}, drafted=(not to_set_drafted), orderby='name')
+        print "possible matches:", possible_players
         if len(possible_players) > 1:
             chooser = ListDialog(self, list_things=possible_players)
-            if chooser.result is not  None:
+            if chooser.result is not None:
                 player_choice = possible_players[chooser.result]
                 s = "drafted"
                 if not to_set_drafted:
@@ -489,5 +563,5 @@ class Drafter(ttk.Frame):
 root = tk.Tk()
 root.geometry("250x150+300+300")
 app = Drafter(root)
-#root.bind("<<Populate>>", app.populate_data_panes)
+# root.bind("<<Populate>>", app.populate_data_panes)
 root.mainloop()
